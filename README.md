@@ -2,6 +2,8 @@
 
 A hybrid recommendation system combining Singular Value Decomposition (SVD) matrix factorization with epsilon-greedy multi-armed bandit strategies for cold-start problem mitigation.
 
+![Web App Screenshot](image.png)
+
 ## Overview
 
 PRISM CINE V2 is a movie recommendation engine built as an educational project to demonstrate the integration of collaborative filtering and exploration-exploitation trade-offs in recommendation systems. The system employs a distributed architecture using Ray for stateful actors, Flask for the web interface, and JADE agents for trend detection via XMPP messaging.
