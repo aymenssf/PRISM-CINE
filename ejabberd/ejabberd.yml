@@ -1,0 +1,93 @@
+# -------------------------------------------------------------------
+# ejabberd configuration for Kinetoscope
+#
+# Minimal dev-oriented setup:
+#   - STARTTLS disabled (all traffic stays inside Docker bridge network)
+#   - mod_http_api enabled so the JADE agent can send XMPP messages
+#     via a simple HTTP POST instead of maintaining its own c2s session
+#   - Open registration for convenience (accounts also pre-created by
+#     CTL_ON_START in docker-compose.yml)
+# -------------------------------------------------------------------
+
+hosts:
+  - kinetoscope.local
+
+loglevel: info
+
+listen:
+  # Client-to-server (c2s) — used by the Flask/Slixmpp XMPP clients
+  -
+    port: 5222
+    ip: "::"
+    module: ejabberd_c2s
+    max_stanza_size: 262144
+    shaper: c2s_shaper
+    access: c2s
+    starttls: false
+
+  # HTTP listener — admin panel + REST API
+  -
+    port: 5280
+    ip: "::"
+    module: ejabberd_http
+    request_handlers:
+      /admin: ejabberd_web_admin
+      /api: mod_http_api
+      /bosh: mod_bosh
+
+auth_method: internal
+auth_password_format: plain
+
+acl:
+  admin:
+    user: admin@kinetoscope.local
+  local:
+    user_regexp: ""
+
+access_rules:
+  c2s:
+    allow: all
+  register:
+    allow: all
+  configure:
+    allow: admin
+  local:
+    allow: local
+
+# API permissions — the JADE agent authenticates as admin to call
+# send_message and send_stanza commands.
+api_permissions:
+  "admin access":
+    who:
+      access:
+        allow:
+          acl: admin
+    what:
+      - "*"
+
+shaper:
+  normal:
+    rate: 3000
+    burst_size: 20000
+  fast: 100000
+
+shaper_rules:
+  max_user_sessions: 10
+  max_user_offline_messages:
+    5000: admin
+    100: all
+  c2s_shaper:
+    none: admin
+    normal: all
+
+modules:
+  mod_roster: {}
+  mod_disco: {}
+  mod_ping: {}
+  mod_http_api: {}
+  mod_offline:
+    access_max_user_messages: max_user_offline_messages
+  mod_register:
+    access: register
+  mod_bosh: {}
+  mod_admin_extra: {}

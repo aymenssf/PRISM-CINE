@@ -1,0 +1,109 @@
+# ===========================================================================
+# Kinetoscope — Docker Compose Orchestration
+#
+# Services:
+#   ejabberd         XMPP server (message broker between JADE and Flask)
+#   flask-ray-node   Python backend (Flask + Ray actor) × 2 replicas
+#   java-agent       JADE TrendScout agent (polls stats, broadcasts boosts)
+#
+# Network:
+#   kinetoscope-net  Shared bridge — all services discover each other
+#                    via Docker DNS (service name resolution).
+# ===========================================================================
+
+networks:
+  kinetoscope-net:
+    driver: bridge
+
+services:
+
+  # -----------------------------------------------------------------------
+  # ejabberd — XMPP server
+  # -----------------------------------------------------------------------
+  ejabberd:
+    image: ghcr.io/processone/ejabberd:latest
+    container_name: ejabberd
+    networks:
+      - kinetoscope-net
+    ports:
+      - "5222:5222"    # c2s  (client-to-server XMPP)
+      - "5280:5280"    # HTTP API + admin panel
+    env_file:
+      - .env
+    environment:
+      # CTL_ON_START runs ejabberdctl commands after the node boots.
+      # The database is mounted as tmpfs (see below), so it is always
+      # fresh on container start — register will never hit "already exists".
+      - CTL_ON_START=register recommender kinetoscope.local ${XMPP_RECOMMENDER_PASSWORD} ;
+                     register trendscout kinetoscope.local ${XMPP_TRENDSCOUT_PASSWORD} ;
+                     register admin kinetoscope.local ${XMPP_ADMIN_PASSWORD}
+    volumes:
+      - ./ejabberd/ejabberd.yml:/opt/ejabberd/conf/ejabberd.yml:ro
+    tmpfs:
+      - /opt/ejabberd/database:size=64m,uid=9000,gid=9000
+    healthcheck:
+      test: ["CMD", "ejabberdctl", "status"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # -----------------------------------------------------------------------
+  # flask-ray-node — Python backend (× 2 replicas)
+  #
+  # Each replica runs its own local Ray cluster with an independent
+  # RecommenderSystem actor.  Both replicas connect to ejabberd as
+  # recommender@kinetoscope.local/<hostname> so XMPP messages are
+  # delivered to all replicas simultaneously.
+  #
+  # Dynamic host-port mapping ("5000" without a fixed host port) lets
+  # Docker assign a random port per replica.  Inside the bridge network
+  # both replicas are reachable at flask-ray-node:5000 via round-robin.
+  # -----------------------------------------------------------------------
+  flask-ray-node:
+    build: ./app
+    networks:
+      - kinetoscope-net
+    deploy:
+      replicas: 1
+    ports:
+      - "5000:5000"
+    env_file:
+      - .env
+    environment:
+      - PYTHONUNBUFFERED=1
+      - XMPP_JID=recommender@kinetoscope.local
+      - XMPP_PASSWORD=${XMPP_RECOMMENDER_PASSWORD}
+      - XMPP_HOST=ejabberd
+      - XMPP_PORT=5222
+      - FLASK_PORT=${FLASK_PORT}
+      - LOG_LEVEL=${LOG_LEVEL}
+      - RAY_memory_usage_threshold=0.98
+    depends_on:
+      ejabberd:
+        condition: service_healthy
+
+  # -----------------------------------------------------------------------
+  # java-agent — JADE TrendScout
+  #
+  # Polls GET /api/stats every 10 s.  When a genre's popularity fraction
+  # exceeds BOOST_THRESHOLD (default 0.4) the agent sends BOOST_GENRE
+  # via ejabberd's HTTP API to all connected Flask replicas.
+  # -----------------------------------------------------------------------
+  java-agent:
+    build: ./java_agent
+    container_name: java-agent
+    networks:
+      - kinetoscope-net
+    env_file:
+      - .env
+    environment:
+      - FLASK_SERVICE_URL=http://flask-ray-node:${FLASK_PORT}
+      - XMPP_HOST=ejabberd
+      - XMPP_ADMIN_USER=admin
+      - XMPP_ADMIN_PASS=${XMPP_ADMIN_PASSWORD}
+      - BOOST_THRESHOLD=0.4
+    depends_on:
+      ejabberd:
+        condition: service_healthy
+      flask-ray-node:
+        condition: service_started
