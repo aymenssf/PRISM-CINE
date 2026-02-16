@@ -1,4 +1,4 @@
-# Guide de Test — Kinetoscope V2 (SVD + Bandit)
+# Guide de Test — PRISM CINE V2 (SVD + Bandit)
 
 ## Lancement de l'application
 

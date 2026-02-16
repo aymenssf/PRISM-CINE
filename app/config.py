@@ -1,5 +1,5 @@
 """
-Configuration centralisée pour Kinetoscope V2.
+Configuration centralisée pour PRISM CINE V2.
 
 Ce module contient toutes les constantes système :
 - Configuration TMDB API pour récupération des posters

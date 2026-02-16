@@ -1,5 +1,5 @@
 """
-Kinetoscope V2 — Moteur de recommandation hybride SVD + Bandit Epsilon-Greedy.
+PRISM CINE V2 — Moteur de recommandation hybride SVD + Bandit Epsilon-Greedy.
 
 Architecture :
     Factorisation matricielle (SVD) avec apprentissage en ligne (SGD)
@@ -26,7 +26,7 @@ import logging
 import time
 from typing import Dict, List, Optional, Any
 
-logger = logging.getLogger("kinetoscope.recommender")
+logger = logging.getLogger("prismcine.recommender")
 
 # ============================================================================
 # Hyperparametres SVD + Bandit

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Script helper pour reinitialiser le systeme Kinetoscope.
+Script helper pour reinitialiser le systeme PRISM CINE.
 
 Usage:
     python reset_system.py

@@ -1,4 +1,4 @@
-# 🎬 Guide de Démonstration — Kinetoscope V2
+# 🎬 Guide de Démonstration — PRISM CINE V2
 
 Guide complet pour démontrer les fonctionnalités du système de recommandation hybride SVD + Bandit Epsilon-Greedy.
 
@@ -465,7 +465,7 @@ Avant la livraison/soutenance, vérifier:
 
 ## 🎓 Explication pour le Jury (Prompt)
 
-> **« Le système Kinetoscope V2 implémente un moteur de recommandation hybride avec 2 composantes :**
+> **« Le système PRISM CINE V2 implémente un moteur de recommandation hybride avec 2 composantes :**
 >
 > **1. Factorisation Matricielle (SVD)**
 > - Matrice R (utilisateurs × films) factorisée en P (utilisateurs × k) et Q (films × k)

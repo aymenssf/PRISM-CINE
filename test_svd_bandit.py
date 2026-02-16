@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Test Suite Complet — Kinetoscope V2 (SVD + Bandit)
+Test Suite Complet — PRISM CINE V2 (SVD + Bandit)
 
 Lance une serie de tests pour valider :
     1. Cold-start (zero donnees)

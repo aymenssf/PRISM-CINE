@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Script de démonstration automatique pour Kinetoscope V2.
+Script de démonstration automatique pour PRISM CINE V2.
 
 Remplit l'UI avec des données réalistes pour une démo projet/soutenance :
 - Reset système
@@ -244,7 +244,7 @@ def print_final_stats():
 
 # ============== Main ==============
 def main():
-    parser = argparse.ArgumentParser(description="Kinetoscope V2 Demo Fill Script")
+    parser = argparse.ArgumentParser(description="PRISM CINE V2 Demo Fill Script")
     parser.add_argument("--users", type=int, default=5, help="Number of users (default: 5)")
     parser.add_argument("--ratings", type=int, default=None, help="Total ratings (default: auto-calculated for 32%% density)")
     parser.add_argument("--density", type=float, default=0.32, help="Target matrix density (default: 0.32)")

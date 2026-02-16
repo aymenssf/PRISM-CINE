@@ -1,5 +1,5 @@
 # -------------------------------------------------------------------
-# ejabberd configuration for Kinetoscope
+# ejabberd configuration for PRISM CINE
 #
 # Minimal dev-oriented setup:
 #   - STARTTLS disabled (all traffic stays inside Docker bridge network)
@@ -10,7 +10,7 @@
 # -------------------------------------------------------------------
 
 hosts:
-  - kinetoscope.local
+  - prismcine.local
 
 loglevel: info
 
@@ -40,7 +40,7 @@ auth_password_format: plain
 
 acl:
   admin:
-    user: admin@kinetoscope.local
+    user: admin@prismcine.local
   local:
     user_regexp: ""
 

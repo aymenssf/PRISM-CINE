@@ -1,4 +1,4 @@
-# Kinetoscope — System Status
+# PRISM CINE — System Status
 
 ## ✅ Functional Components
 
@@ -22,12 +22,12 @@
 - **Status**: Healthy and accepting connections
 - **Ports**: 5222 (c2s), 5280 (HTTP API)
 - **Registered accounts**:
-  - `recommender@kinetoscope.local` / `rec1pass`
-  - `trendscout@kinetoscope.local` / `trendpass`
-  - `admin@kinetoscope.local` / `admin_pass`
+  - `recommender@prismcine.local` / `rec1pass`
+  - `trendscout@prismcine.local` / `trendpass`
+  - `admin@prismcine.local` / `admin_pass`
 - **Test**:
   ```bash
-  docker exec ejabberd ejabberdctl registered_users kinetoscope.local
+  docker exec ejabberd ejabberdctl registered_users prismcine.local
   docker exec ejabberd ejabberdctl status
   ```
 
@@ -56,7 +56,7 @@
 The slixmpp 1.12 async API requires proper coroutine scheduling. The current implementation creates the client and calls `connect()`, but the event loop isn't processing the internal connection coroutines that handle authentication.
 
 ### Evidence
-- Flask logs show: `XMPP client created for JID: recommender@kinetoscope.local/<hostname>`
+- Flask logs show: `XMPP client created for JID: recommender@prismcine.local/<hostname>`
 - No `XMPP session started` message
 - ejabberd `connected_users` returns empty (no active c2s sessions)
 - JADE agent's XMPP messages delivered to ejabberd but not forwarded (no connected recipient)

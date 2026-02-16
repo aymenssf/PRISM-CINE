@@ -1,9 +1,9 @@
 """
-Kinetoscope — Flask application entry-point.
+PRISM CINE — Flask application entry-point.
 
 Assemble les composants distribues :
     - Ray actor  (RecommenderSystem)  pour la logique de recommandation stateful
-    - Slixmpp    (KinetoscopeXMPPClient) pour la messagerie XMPP temps-reel
+    - Slixmpp    (PRISMCINEXMPPClient) pour la messagerie XMPP temps-reel
     - Flask      (REST API + Jinja2 UI) pour les endpoints HTTP
 
 SYSTEM_STATE (dict mutable) :
@@ -23,7 +23,7 @@ import ray
 from flask import Flask, request, jsonify, render_template
 
 from core.recommender import RecommenderSystem, MOVIE_CATALOG
-from core.xmpp_client import KinetoscopeXMPPClient
+from core.xmpp_client import PRISMCINEXMPPClient
 from utils.tmdb_client import tmdb_client  # NOUVEAU : pour posters TMDB
 
 # ---------------------------------------------------------------------------
@@ -33,7 +33,7 @@ logging.basicConfig(
     level=os.getenv("LOG_LEVEL", "INFO"),
     format="%(asctime)s - [%(levelname)s] - %(message)s",
 )
-logger = logging.getLogger("kinetoscope.app")
+logger = logging.getLogger("prismcine.app")
 
 # ---------------------------------------------------------------------------
 # Etat partage entre le thread XMPP et les routes Flask.
@@ -74,7 +74,7 @@ logger.info("[NODE-1] Ray actor RecommenderSystem created")
 
 async def _run_xmpp_client(actor):
     """Coroutine async pour lancer le client XMPP."""
-    jid_base = os.getenv("XMPP_JID", "recommender@kinetoscope.local")
+    jid_base = os.getenv("XMPP_JID", "recommender@prismcine.local")
     password = os.getenv("XMPP_PASSWORD", "rec1pass")
     host = os.getenv("XMPP_HOST", "ejabberd")
     port = int(os.getenv("XMPP_PORT", "5222"))
@@ -83,7 +83,7 @@ async def _run_xmpp_client(actor):
     full_jid = f"{jid_base}/{resource}"
 
     # On passe le callback Flask pour mettre a jour BOOSTED_GENRE
-    client = KinetoscopeXMPPClient(full_jid, password, actor, boost_callback=_on_boost_received)
+    client = PRISMCINEXMPPClient(full_jid, password, actor, boost_callback=_on_boost_received)
     client.use_tls = False
     client.use_ssl = False
     # Autoriser PLAIN SASL sur connexion non-chiffree (trafic interne Docker)

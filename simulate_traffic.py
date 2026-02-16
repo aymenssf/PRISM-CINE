@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Kinetoscope — Script de simulation de trafic pour la soutenance.
+PRISM CINE — Script de simulation de trafic pour la soutenance.
 
 Ce script bombarde le serveur Flask de notes sur les films Sci-Fi
 pour forcer l agent JADE a detecter la tendance et declencher la

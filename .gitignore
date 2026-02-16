@@ -1,5 +1,5 @@
 # ============================================================================
-# Kinetoscope V2 - Git Ignore
+# PRISM CINE V2 - Git Ignore
 # ============================================================================
 
 # Environment variables (CRITICAL: protège les secrets)
@@ -78,3 +78,13 @@ ray_results/
 .Trashes
 ehthumbs.db
 Thumbs.db
+
+test_exhaustif.py
+SYSTEM_STATUS.md
+test_svd_bandit.py
+simulate_traffic.py
+README_DEMO.md
+GUIDE_TESTS.md
+demo_fill.py
+ANALYSE_CONVERGENCE.md
+reset_system.py

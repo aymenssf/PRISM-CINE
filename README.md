@@ -1,10 +1,10 @@
-# Kinetoscope V2
+# PRISM CINE V2
 
 A hybrid recommendation system combining Singular Value Decomposition (SVD) matrix factorization with epsilon-greedy multi-armed bandit strategies for cold-start problem mitigation.
 
 ## Overview
 
-Kinetoscope V2 is a movie recommendation engine built as an educational project to demonstrate the integration of collaborative filtering and exploration-exploitation trade-offs in recommendation systems. The system employs a distributed architecture using Ray for stateful actors, Flask for the web interface, and JADE agents for trend detection via XMPP messaging.
+PRISM CINE V2 is a movie recommendation engine built as an educational project to demonstrate the integration of collaborative filtering and exploration-exploitation trade-offs in recommendation systems. The system employs a distributed architecture using Ray for stateful actors, Flask for the web interface, and JADE agents for trend detection via XMPP messaging.
 
 ### Key Features
 
@@ -86,7 +86,7 @@ with α=0.7 weighting toward content-based genre affinity.
 1. Clone the repository:
 ```bash
 git clone <repository-url>
-cd Kinetoscope
+cd PRISM CINE
 ```
 
 2. Configure environment variables:
@@ -113,7 +113,7 @@ http://localhost:5000
 ## Project Structure
 
 ```
-Kinetoscope/
+PRISM CINE/
 ├── app/
 │   ├── core/
 │   │   └── recommender.py       # SVD + Bandit implementation

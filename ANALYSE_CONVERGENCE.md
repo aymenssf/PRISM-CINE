@@ -1,4 +1,4 @@
-# 📊 Analyse de Convergence SVD — Kinetoscope V2
+# 📊 Analyse de Convergence SVD — PRISM CINE V2
 
 ## Situation Actuelle (5 votes Alice)
 

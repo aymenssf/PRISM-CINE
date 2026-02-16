@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Suite de Tests EXHAUSTIVE — Kinetoscope V2 (SVD + Bandit)
+Suite de Tests EXHAUSTIVE — PRISM CINE V2 (SVD + Bandit)
 
 Couvre 15 scenarios de test pour garantir que le systeme fonctionne :
     1. Cold-start (zero donnees)

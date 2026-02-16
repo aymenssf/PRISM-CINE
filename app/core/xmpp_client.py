@@ -1,5 +1,5 @@
 """
-Kinetoscope — Client XMPP reliant les messages ejabberd au Ray actor.
+PRISM CINE — Client XMPP reliant les messages ejabberd au Ray actor.
 
 Ici on utilise XMPP (plutot qu un callback REST) car :
     - Livraison de messages en temps-reel sans polling.
@@ -14,12 +14,12 @@ import logging
 import ray
 from typing import Any, Optional, Callable
 
-logger = logging.getLogger("kinetoscope.xmpp")
+logger = logging.getLogger("prismcine.xmpp")
 
 
-class KinetoscopeXMPPClient(slixmpp.ClientXMPP):
+class PRISMCINEXMPPClient(slixmpp.ClientXMPP):
     """
-    Se connecte a ejabberd en tant que ``recommender@kinetoscope.local/<hostname>``.
+    Se connecte a ejabberd en tant que ``recommender@prismcine.local/<hostname>``.
 
     Ecoute deux types de messages :
         UPDATE              – acquittement seul (futur : declencher recalcul)
