@@ -1,15 +1,7 @@
 """
-PRISM CINE — Flask application entry-point.
+PRISM CINE — Point d'entree Flask.
 
-Assemble les composants distribues :
-    - Ray actor  (RecommenderSystem)  pour la logique de recommandation stateful
-    - Slixmpp    (PRISMCINEXMPPClient) pour la messagerie XMPP temps-reel
-    - Flask      (REST API + Jinja2 UI) pour les endpoints HTTP
-
-SYSTEM_STATE (dict mutable) :
-    Dictionnaire partage entre le thread XMPP et les routes Flask.
-    Les dicts Python sont thread-safe pour les ecritures atomiques de cles.
-    Evite le piege de portee du 'global' avec reassignation de string.
+Assemble Ray (RecommenderSystem), XMPP (Slixmpp) et Flask (REST + UI).
 """
 
 import os
@@ -26,21 +18,14 @@ from core.recommender import RecommenderSystem, MOVIE_CATALOG
 from core.xmpp_client import PRISMCINEXMPPClient
 from utils.tmdb_client import tmdb_client  # NOUVEAU : pour posters TMDB
 
-# ---------------------------------------------------------------------------
-# Logging structure --
-# ---------------------------------------------------------------------------
+# --- Logging ---
 logging.basicConfig(
     level=os.getenv("LOG_LEVEL", "INFO"),
     format="%(asctime)s - [%(levelname)s] - %(message)s",
 )
 logger = logging.getLogger("prismcine.app")
 
-# ---------------------------------------------------------------------------
-# Etat partage entre le thread XMPP et les routes Flask.
-# On utilise un dict mutable (pas un string immutable + global) pour que
-# les modifications faites dans le thread XMPP soient visibles par Flask
-# sans probleme de portee.
-# ---------------------------------------------------------------------------
+# Etat partage XMPP <-> Flask (dict mutable, thread-safe pour les ecritures atomiques)
 SYSTEM_STATE = {"boosted_genre": None}
 
 def _on_boost_received(genre: str) -> None:
@@ -49,28 +34,18 @@ def _on_boost_received(genre: str) -> None:
     print(f"!!! UI UPDATE !!! Genre is now: {SYSTEM_STATE['boosted_genre']}")
     logger.info("[NODE-1] SYSTEM_STATE boosted_genre updated to: %s", genre)
 
-# ---------------------------------------------------------------------------
-# Initialisation Ray
-# ---------------------------------------------------------------------------
-# Cluster local single-node par conteneur. ignore_reinit_error protege
-# contre le reloader de debug de Flask (desactive en production CMD).
-# Dashboard desactive et memoire limitee pour reduire l empreinte conteneur
-# (le dashboard Ray seul utilise ~500MB ; on n a besoin que du systeme d acteurs)
+# --- Initialisation Ray ---
 ray.init(
     ignore_reinit_error=True,
     include_dashboard=False,
-    object_store_memory=100 * 1024 * 1024,  # 100MB object store (matrices petites)
+    object_store_memory=100 * 1024 * 1024,
     _system_config={"automatic_object_spilling_enabled": False}
 )
 recommender = RecommenderSystem.remote()
 print("[NODE-1] Ray actor RecommenderSystem created")
 logger.info("[NODE-1] Ray actor RecommenderSystem created")
 
-# ---------------------------------------------------------------------------
-# Client XMPP -- tourne dans son propre thread daemon avec une boucle
-# d evenements dediee. Flask est WSGI (synchrone), slixmpp est asyncio ;
-# des threads separes empechent l un de bloquer l autre.
-# ---------------------------------------------------------------------------
+# --- Client XMPP (thread daemon + boucle asyncio dediee) ---
 
 async def _run_xmpp_client(actor):
     """Coroutine async pour lancer le client XMPP."""
@@ -82,11 +57,9 @@ async def _run_xmpp_client(actor):
     resource = socket.gethostname()
     full_jid = f"{jid_base}/{resource}"
 
-    # On passe le callback Flask pour mettre a jour BOOSTED_GENRE
     client = PRISMCINEXMPPClient(full_jid, password, actor, boost_callback=_on_boost_received)
     client.use_tls = False
     client.use_ssl = False
-    # Autoriser PLAIN SASL sur connexion non-chiffree (trafic interne Docker)
     client['feature_mechanisms'].unencrypted_plain = True
 
     print(f"[NODE-1] Connecting XMPP to {host}:{port} as {full_jid}", flush=True)
@@ -112,9 +85,7 @@ _xmpp_thread = threading.Thread(target=_start_xmpp_client, args=(recommender,), 
 _xmpp_thread.start()
 print("[NODE-1] XMPP thread started (daemon)")
 
-# ---------------------------------------------------------------------------
-# Application Flask
-# ---------------------------------------------------------------------------
+# --- Application Flask ---
 app = Flask(__name__)
 
 
@@ -126,7 +97,6 @@ def index():
         stats = ray.get(recommender.get_stats.remote())
         recommendations = ray.get(recommender.recommend.remote(user_id=None))
 
-        # Récupérer les posters TMDB pour tous les films
         posters = tmdb_client.get_all_posters(MOVIE_CATALOG)
 
         movies = [
@@ -144,13 +114,11 @@ def index():
         stats = {"total_users": 0, "total_ratings": 0, "genre_popularity": {}, "boosted_genre": None}
         recommendations = {"recommendations": []}
         movies = []
-        posters = {}  # Dict vide en cas d'erreur
+        posters = {}
 
-    # Sante systeme mock pour le contexte UI, affiche dans le HUD
     system_health = {'ray': True, 'xmpp': True, 'jade_agent': 'Scanning'}
     nodes_active = 3
 
-    # SYSTEM_STATE dict mutable -- visible depuis le thread XMPP
     current_boost = SYSTEM_STATE["boosted_genre"] or stats.get("boosted_genre")
     print(f"[NODE-1] Rendering index -- current_boost = {current_boost}")
 
@@ -159,7 +127,7 @@ def index():
         stats=stats,
         recommendations=recommendations,
         movies=movies,
-        posters=posters,  # NOUVEAU : dict {movie_id: poster_url}
+        posters=posters,
         system_health=system_health,
         nodes_active=nodes_active,
         current_boost=current_boost,
@@ -181,9 +149,8 @@ def rate_movie():
         if "error" in result:
             return jsonify(result), 400
 
-        # Broadcast XMPP UPDATE (notification aux replicas)
+        # Broadcast XMPP UPDATE
         print(f"[NODE-1] Broadcasting XMPP UPDATE after rating {movie_id}")
-        logger.info("[NODE-1] Rating accepted, XMPP UPDATE broadcast")
 
         return jsonify(result)
     except (KeyError, TypeError, ValueError) as exc:
@@ -223,6 +190,35 @@ def get_stats():
         return jsonify({"error": "internal_error"}), 500
 
 
+@app.route("/api/config", methods=["GET"])
+def get_config():
+    """Retourne la configuration actuelle du moteur (cb_weight, epsilon, use_bias)."""
+    try:
+        config = ray.get(recommender.get_config.remote())
+        return jsonify(config)
+    except Exception as exc:
+        logger.error("[NODE-1] Config read error: %s", exc)
+        return jsonify({"error": str(exc)}), 500
+
+
+@app.route("/api/config", methods=["POST"])
+def set_config():
+    """Met a jour les hyperparametres du moteur (pour benchmarking)."""
+    try:
+        data = request.get_json(force=True)
+        cb_weight = data.get("cb_weight")
+        epsilon = data.get("epsilon")
+        use_bias = data.get("use_bias")
+        print(f"[NODE-1] POST /api/config -- cb_weight={cb_weight} epsilon={epsilon} use_bias={use_bias}")
+        config = ray.get(recommender.set_config.remote(
+            cb_weight=cb_weight, epsilon=epsilon, use_bias=use_bias
+        ))
+        return jsonify({"status": "config_updated", "config": config})
+    except Exception as exc:
+        logger.error("[NODE-1] Config update error: %s", exc)
+        return jsonify({"error": str(exc)}), 400
+
+
 @app.route("/api/boost", methods=["POST"])
 def boost_genre():
     """Applique un boost de genre (endpoint interne, ou appelable manuellement)."""
@@ -239,18 +235,20 @@ def boost_genre():
         return jsonify({"error": str(exc)}), 400
 
 
+@app.route("/api/boost-status")
+def boost_status():
+    """Retourne le genre actuellement booste (polling JS)."""
+    current = SYSTEM_STATE["boosted_genre"]
+    return jsonify({"boosted_genre": current})
+
+
 @app.route("/api/reset", methods=["POST"])
 def reset_system():
-    """
-    RESET complet du systeme (pour tests uniquement).
-
-    Reinitialise tous les utilisateurs, notes, facteurs latents SVD.
-    Utilise avec precaution — toutes les donnees sont perdues.
-    """
+    """RESET complet du systeme (pour tests uniquement)."""
     try:
         print("[NODE-1] POST /api/reset -- WIPING ALL DATA")
         result = ray.get(recommender.reset.remote())
-        SYSTEM_STATE["boosted_genre"] = None  # Reset aussi le boost Flask
+        SYSTEM_STATE["boosted_genre"] = None
         print(f"[NODE-1] Reset complete: {result}")
         logger.warning("[NODE-1] System RESET executed: %s", result)
         return jsonify(result)
@@ -260,12 +258,8 @@ def reset_system():
         return jsonify({"error": str(exc)}), 500
 
 
-# ---------------------------------------------------------------------------
-# Point d entree
-# ---------------------------------------------------------------------------
+# --- Point d'entree ---
 if __name__ == "__main__":
     flask_port = int(os.getenv("FLASK_PORT", "5000"))
     print(f"[NODE-1] Flask starting on 0.0.0.0:{flask_port}")
-    # debug=False : Ray fork des processus et le reloader de Flask
-    # double-initialiserait le cluster Ray.
     app.run(host="0.0.0.0", port=flask_port, debug=False, threaded=True)

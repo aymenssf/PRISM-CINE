@@ -1,22 +1,11 @@
 """
 PRISM CINE V2 — Moteur de recommandation hybride SVD + Bandit Epsilon-Greedy.
 
-Architecture :
-    Factorisation matricielle (SVD) avec apprentissage en ligne (SGD)
-    pour capturer les facteurs latents des gouts utilisateurs,
-    combinee a une strategie Multi-Armed Bandit (Epsilon-Greedy)
-    pour equilibrer Exploitation (films predits comme pertinents)
-    et Exploration (decouverte de preferences inconnues).
+Factorisation matricielle (SVD) avec apprentissage en ligne (SGD),
+combinee a une strategie Multi-Armed Bandit (Epsilon-Greedy)
+pour equilibrer exploitation et exploration.
 
-Ici on utilise Ray car :
-    Les Ray actors fournissent des objets *stateful* et *thread-safe*.
-    Plusieurs threads Flask peuvent appeler rate() et recommend()
-    simultanement ; Ray serialise ces appels par acteur, eliminant
-    les race-conditions sur les matrices NumPy partagees sans verrous
-    explicites.
-
-Dataset : "MovieLens-Lite" — 20 films hardcodes couvrant 8 genres
-    pour simuler un vrai catalogue sans dependance a un fichier externe.
+Utilise Ray pour la concurrence thread-safe des matrices NumPy.
 """
 
 import ray
@@ -28,27 +17,16 @@ from typing import Dict, List, Optional, Any
 
 logger = logging.getLogger("prismcine.recommender")
 
-# ============================================================================
 # Hyperparametres SVD + Bandit
-#
-#   k              : dimension de l espace latent (rang de la factorisation)
-#   LEARNING_RATE  : pas de descente SGD (alpha dans les formules)
-#   REGULARIZATION : coefficient L2 (lambda) pour eviter le surapprentissage
-#   EPSILON        : probabilite d exploration du bandit epsilon-greedy
-# ============================================================================
 LATENT_FACTORS_K = 10
 LEARNING_RATE = 0.05
 REGULARIZATION = 0.02
 EPSILON = 0.2
-GLOBAL_MEAN = 3.0   # Centre de l echelle 1-5 (biais global SVD)
-SGD_EPOCHS = 10      # Nombre d iterations SGD par appel a rate()
-CB_WEIGHT = 0.7      # Poids du content-based dans le score hybride (0..1)
+GLOBAL_MEAN = 3.0
+SGD_EPOCHS = 10
+CB_WEIGHT = 0.7
 
-# ============================================================================
-# MovieLens-Lite — 50 films hardcodes, 10 genres equilibres
-# En production, ce catalogue serait alimente par une base de donnees.
-# tmdb_id : Identifiant TMDB pour recuperer les posters via TMDB API
-# ============================================================================
+# Catalogue : 50 films, 10 genres (5 par genre)
 MOVIE_CATALOG: Dict[str, Dict[str, Any]] = {
     # ===== ACTION (5 films) =====
     "movie_1":  {"title": "The Matrix",              "genre": "Action", "tmdb_id": 603},
@@ -125,20 +103,11 @@ MOVIE_CATALOG: Dict[str, Dict[str, Any]] = {
 @ray.remote
 class RecommenderSystem:
     """
-    Stateful Ray actor implementing a hybrid recommendation engine :
+    Ray Actor : moteur de recommandation hybride SVD + Content-Based + Bandit.
 
-        1. Factorisation Matricielle (SVD)
-           R ≈ P . Q^T
-           ou P (n_users x k) et Q (n_items x k) sont les matrices
-           de facteurs latents, apprises par SGD a chaque vote.
-
-        2. Multi-Armed Bandit (Epsilon-Greedy)
-           - Exploitation (1 - epsilon) : films avec le plus haut P_u . Q_i
-           - Exploration  (epsilon)     : film aleatoire pour decouvrir
-             de nouvelles preferences utilisateur.
-
-    Ici on utilise un Ray Actor car les matrices sont partagees entre toutes
-    les requetes Flask -- Ray garantit la coherence sans lock explicite.
+    - R ≈ mu + b_u + b_i + P . Q^T  (factorisation matricielle biaisee)
+    - Epsilon-Greedy pour l'exploration
+    - Apprentissage en ligne (SGD a chaque vote)
     """
 
     def __init__(self):
@@ -147,44 +116,38 @@ class RecommenderSystem:
         self.user_ids: List[str] = []
         self.user_index: Dict[str, int] = {}
 
-        # Matrice 2-D : lignes = utilisateurs, colonnes = films. 0.0 = non note.
-        # Conservee pour savoir quels films ont ete notes (masque d exclusion).
+        # Matrice des notes (lignes=users, colonnes=films). 0.0 = non note.
         self.ratings: np.ndarray = np.zeros((0, len(self.movie_ids)), dtype=np.float64)
 
-        # -- Factorisation matricielle SVD avec biais : R ≈ mu + b_u + b_i + P . Q^T --
-        # mu : biais global (moyenne de l echelle 1-5 = 3.0)
-        # b_u : biais utilisateur (tend-il a noter haut ou bas ?)
-        # b_i : biais item (ce film est-il generalement bien note ?)
-        # P : matrice des facteurs latents utilisateurs (n_users x k)
-        # Q : matrice des facteurs latents items       (n_items x k)
-        #
-        # Initialises avec uniform(0.3, 0.7) pour briser la symetrie.
+        # SVD biaisee : R ≈ mu + b_u + b_i + P . Q^T
         self.latent_dim: int = LATENT_FACTORS_K
         self.learning_rate: float = LEARNING_RATE
         self.regularization: float = REGULARIZATION
         self.epsilon: float = EPSILON
         self.global_mean: float = GLOBAL_MEAN
 
-        # Q est fixe en taille (50 films) -- on l initialise immediatement.
+        # Q : facteurs latents items (fixe en taille)
         self.item_latent_factors: np.ndarray = np.random.uniform(
             -0.01, 0.01, size=(len(self.movie_ids), self.latent_dim)
         )
-
-        # P demarre vide et grandit avec chaque nouvel utilisateur.
+        # P : facteurs latents utilisateurs (grandit dynamiquement)
         self.user_latent_factors: np.ndarray = np.zeros(
             (0, self.latent_dim), dtype=np.float64
         )
 
-        # Biais item : un scalaire par film (initialise a 0)
+        # Biais
         self.item_bias: np.ndarray = np.zeros(len(self.movie_ids), dtype=np.float64)
-        # Biais utilisateur : grandit dynamiquement avec les users
         self.user_bias: np.ndarray = np.zeros(0, dtype=np.float64)
 
-        # Etat de boost genre -- defini par les messages XMPP BOOST_GENRE.
+        # Poids CB (modifiable a chaud pour benchmarking)
+        self.cb_weight: float = CB_WEIGHT
+        self.use_bias: bool = True
+
+        # Boost genre (JADE/XMPP)
         self.boosted_genre: Optional[str] = None
         self.boost_factor: float = 0.2
 
-        # Compteurs pour /api/stats consomme par l agent JADE.
+        # Compteurs stats
         self.total_ratings: int = 0
         self.rating_counts_by_genre: Dict[str, int] = {
             m["genre"]: 0 for m in MOVIE_CATALOG.values()
@@ -198,29 +161,19 @@ class RecommenderSystem:
         logger.info("[RAY-ACTOR] RecommenderSystem actor initialised with %d movies (SVD mode)",
                     len(self.movie_ids))
 
-    # ------------------------------------------------------------------
-    # Helpers prives
-    # ------------------------------------------------------------------
+    # --- Helpers prives ---
 
     def _ensure_user(self, user_id: str) -> int:
-        """
-        Enregistre un nouvel utilisateur dans la matrice si premiere visite.
-
-        Cold-start SVD : le vecteur latent est initialise avec du bruit
-        faible et le biais utilisateur a 0 (neutre). La prediction initiale
-        sera mu + 0 + b_i + ~0 = ~3.0 (centre de l echelle).
-        """
+        """Enregistre un nouvel utilisateur si premiere visite (cold-start)."""
         if user_id not in self.user_index:
             idx = len(self.user_ids)
             self.user_ids.append(user_id)
             self.user_index[user_id] = idx
 
-            # Extension de la matrice des notes
             new_row = np.zeros((1, len(self.movie_ids)), dtype=np.float64)
             self.ratings = (np.vstack([self.ratings, new_row])
                             if self.ratings.size > 0 else new_row)
 
-            # Cold-start : vecteur latent avec bruit faible
             new_latent_vector = np.random.uniform(
                 -0.01, 0.01, size=(1, self.latent_dim)
             )
@@ -230,7 +183,6 @@ class RecommenderSystem:
                 else new_latent_vector
             )
 
-            # Biais utilisateur initialise a 0 (neutre)
             self.user_bias = np.append(self.user_bias, 0.0)
 
             print(f"[RAY-ACTOR] New user registered: {user_id} (index={idx})")
@@ -239,63 +191,47 @@ class RecommenderSystem:
     def _sgd_update(self, user_idx: int, movie_idx: int, actual_rating: float,
                     update_items: bool = True) -> float:
         """
-        Mise a jour SGD (Stochastic Gradient Descent) des facteurs latents
-        et des biais.
+        Mise a jour SGD des facteurs latents et biais.
 
-        Formulation mathematique (SVD avec biais) :
-            prediction  = mu + b_u + b_i + P_u . Q_i^T
-            erreur      = r_ui - prediction
-
-            # Mise a jour des biais :
-            b_u <- b_u + alpha * (erreur - lambda * b_u)
-            b_i <- b_i + alpha * (erreur - lambda * b_i)   [si update_items]
-
-            # Mise a jour des facteurs latents :
-            P_u <- P_u + alpha * (erreur * Q_i - lambda * P_u)
-            Q_i <- Q_i + alpha * (erreur * P_u - lambda * Q_i)   [si update_items]
+        prediction  = mu + b_u + b_i + P_u . Q_i^T  (si use_bias)
+        erreur      = r_ui - prediction
 
         Args:
-            update_items : si False, seuls P_u et b_u sont mis a jour.
-                Cela evite la cross-contamination des facteurs items
-                partages entre utilisateurs lors du multi-epoch.
-
+            update_items : si False, seuls P_u et b_u sont mis a jour
+                (evite la cross-contamination en multi-epoch).
         Returns:
-            prediction_error : l erreur avant mise a jour (monitoring).
+            prediction_error avant mise a jour.
         """
-        # Copie des vecteurs actuels (important : utiliser les valeurs
-        # AVANT mise a jour pour les deux gradients)
         user_latent_vector = self.user_latent_factors[user_idx].copy()
         item_latent_vector = self.item_latent_factors[movie_idx].copy()
 
-        # Prediction SVD avec biais : mu + b_u + b_i + P_u . Q_i
-        predicted_rating = (
-            self.global_mean
-            + self.user_bias[user_idx]
-            + self.item_bias[movie_idx]
-            + np.dot(user_latent_vector, item_latent_vector)
-        )
+        if self.use_bias:
+            predicted_rating = (
+                self.global_mean
+                + self.user_bias[user_idx]
+                + self.item_bias[movie_idx]
+                + np.dot(user_latent_vector, item_latent_vector)
+            )
+        else:
+            predicted_rating = np.dot(user_latent_vector, item_latent_vector)
 
-        # Erreur de prediction
         prediction_error = actual_rating - predicted_rating
 
-        # Mise a jour biais utilisateur (toujours)
-        self.user_bias[user_idx] += self.learning_rate * (
-            prediction_error - self.regularization * self.user_bias[user_idx]
-        )
+        if self.use_bias:
+            self.user_bias[user_idx] += self.learning_rate * (
+                prediction_error - self.regularization * self.user_bias[user_idx]
+            )
 
-        # Mise a jour biais item (seulement si update_items)
-        if update_items:
+        if update_items and self.use_bias:
             self.item_bias[movie_idx] += self.learning_rate * (
                 prediction_error - self.regularization * self.item_bias[movie_idx]
             )
 
-        # SGD Update Rule: P_u = P_u + lr * (err * Q_i - reg * P_u)
         self.user_latent_factors[user_idx] += self.learning_rate * (
             prediction_error * item_latent_vector
             - self.regularization * user_latent_vector
         )
 
-        # SGD Update Rule: Q_i (seulement si update_items)
         if update_items:
             self.item_latent_factors[movie_idx] += self.learning_rate * (
                 prediction_error * user_latent_vector
@@ -306,39 +242,39 @@ class RecommenderSystem:
 
     def _compute_genre_affinity(self, user_idx: int) -> np.ndarray:
         """
-        Content-Based Filtering : calcule un score d affinite par film
-        base sur la note moyenne de l utilisateur pour chaque genre.
-
-        Pour chaque film non note, le score est la moyenne des notes
-        que l utilisateur a donnees aux films du meme genre.
-        Si l utilisateur n a note aucun film de ce genre, on utilise
-        la moyenne globale (GLOBAL_MEAN = 3.0).
-
-        Cela fournit un signal fort et immediat base sur les features
-        du contenu (genre), contrairement au SVD qui necessite beaucoup
-        de donnees pour converger.
+        Score Content-Based par film : moyenne des notes du meme genre,
+        avec bonus de preference (ecart a la moyenne personnelle × 0.5).
         """
         user_ratings = self.ratings[user_idx]
 
-        # Calculer la moyenne par genre pour cet utilisateur
         genre_sums: Dict[str, float] = {}
         genre_counts: Dict[str, int] = {}
+        all_rated_sum = 0.0
+        all_rated_count = 0
         for midx in range(len(self.movie_ids)):
             if user_ratings[midx] > 0:
                 genre = MOVIE_CATALOG[self.movie_ids[midx]]["genre"]
                 genre_sums[genre] = genre_sums.get(genre, 0.0) + user_ratings[midx]
                 genre_counts[genre] = genre_counts.get(genre, 0) + 1
+                all_rated_sum += user_ratings[midx]
+                all_rated_count += 1
 
         genre_avg: Dict[str, float] = {}
         for g in genre_sums:
             genre_avg[g] = genre_sums[g] / genre_counts[g]
 
-        # Pour chaque film, le score content-based = moyenne du genre
+        user_global_avg = all_rated_sum / max(all_rated_count, 1)
+
         cb_scores = np.full(len(self.movie_ids), self.global_mean, dtype=np.float64)
         for midx, mid in enumerate(self.movie_ids):
             genre = MOVIE_CATALOG[mid]["genre"]
             if genre in genre_avg:
-                cb_scores[midx] = genre_avg[genre]
+                base_score = genre_avg[genre]
+                diff = base_score - user_global_avg
+                preference_bonus = diff * 0.5
+                cb_scores[midx] = base_score + preference_bonus
+            else:
+                cb_scores[midx] = self.global_mean - 0.3
 
         return cb_scores
 
@@ -396,19 +332,11 @@ class RecommenderSystem:
                 })
         return {"user_id": None, "recommendations": recommendations, "note": "cold_start"}
 
-    # ------------------------------------------------------------------
-    # API Publique (appelee via ray.get)
-    # ------------------------------------------------------------------
+    # --- API Publique ---
 
     def rate(self, user_id: str, movie_id: str, rating: float) -> Dict:
         """
-        Enregistre une note utilisateur (1.0-5.0) et met a jour
-        les facteurs latents par descente de gradient stochastique (SGD).
-
-        Online Learning multi-epoch : a chaque nouveau vote, on re-itere
-        SGD_EPOCHS fois sur TOUS les ratings existants de cet utilisateur.
-        Cela permet aux facteurs latents de converger rapidement meme
-        avec peu de donnees (cold-start).
+        Enregistre une note (1-5) et met a jour les facteurs latents (SGD multi-epoch).
         """
         if movie_id not in self.movie_index:
             return {"error": f"Unknown movie: {movie_id}"}
@@ -418,14 +346,9 @@ class RecommenderSystem:
         user_idx = self._ensure_user(user_id)
         movie_idx = self.movie_index[movie_id]
 
-        # Stocker la note dans la matrice (sert a savoir quels films
-        # ont ete notes pour l exclusion dans recommend())
         self.ratings[user_idx, movie_idx] = rating
 
-        # -- Multi-epoch SGD pour affiner le profil utilisateur --
-        # Epoch 0 : mise a jour complete (P_u, Q_i, b_u, b_i)
-        # Epochs 1..N : mise a jour user-only (P_u, b_u) pour eviter
-        # la cross-contamination des facteurs items partages.
+        # Multi-epoch SGD : epoch 0 full, epochs 1..N user-only
         rated_indices = np.where(self.ratings[user_idx] > 0)[0]
         final_error = 0.0
         for midx in rated_indices:
@@ -436,7 +359,6 @@ class RecommenderSystem:
                 stored_rating = self.ratings[user_idx, midx]
                 final_error = self._sgd_update(user_idx, midx, stored_rating, update_items=False)
 
-        # Compteurs pour /api/stats consomme par l agent JADE
         genre = MOVIE_CATALOG[movie_id]["genre"]
         self.rating_counts_by_genre[genre] = self.rating_counts_by_genre.get(genre, 0) + 1
         self.total_ratings += 1
@@ -452,22 +374,9 @@ class RecommenderSystem:
 
     def recommend(self, user_id: Optional[str] = None, top_n: int = 5) -> Dict:
         """
-        Recommandation hybride : SVD + Content-Based + Bandit Epsilon-Greedy.
+        Recommandation hybride : SVD + CB + Bandit Epsilon-Greedy.
 
-        Pipeline :
-            1. SVD score  : mu + b_u + b_i + P_u . Q_i  (collaborative filtering)
-            2. CB score   : moyenne des notes user par genre  (content-based)
-            3. Hybrid     : (1 - CB_WEIGHT) * svd + CB_WEIGHT * cb
-            4. Clamper dans [0, 5]
-            5. Appliquer le boost de genre (si actif via JADE/XMPP)
-            6. Masquer les films deja notes
-            7. Strategie epsilon-greedy :
-               - Avec probabilite (1 - epsilon) : Top-N par score (MATCH)
-               - Avec probabilite epsilon       : film aleatoire non note (DISCOVERY)
-
-        Le hybride garantit que les recommendations refletent les preferences
-        de genre meme avec peu de donnees (cold-start), tandis que le SVD
-        affine la personnalisation au fur et a mesure.
+        Pipeline : SVD -> CB -> blending -> boost JADE -> masquage -> epsilon-greedy.
         """
         if user_id is None or user_id not in self.user_index:
             print(f"[RAY-ACTOR] Cold-start recommendations requested (user={user_id})")
@@ -476,56 +385,43 @@ class RecommenderSystem:
         user_idx = self.user_index[user_id]
         user_vector = self.ratings[user_idx]
 
-        # Cas limite : tous les films ont ete notes
         unrated_mask = user_vector == 0.0
         if not np.any(unrated_mask):
             return {"user_id": user_id, "recommendations": [], "note": "all_rated"}
 
-        # -- Score SVD avec biais (Collaborative Filtering) --
-        svd_scores = (
-            self.global_mean
-            + self.user_bias[user_idx]
-            + self.item_bias
-            + self.user_latent_factors[user_idx] @ self.item_latent_factors.T
-        )
-        # Clamper SVD AVANT le blending pour eviter que des biais items
-        # gonfles (b_i >> 0 si genre populaire) ne dominent le CB.
+        # Score SVD
+        if self.use_bias:
+            svd_scores = (
+                self.global_mean
+                + self.user_bias[user_idx]
+                + self.item_bias
+                + self.user_latent_factors[user_idx] @ self.item_latent_factors.T
+            )
+        else:
+            svd_scores = self.user_latent_factors[user_idx] @ self.item_latent_factors.T
         svd_scores = np.clip(svd_scores, 0.0, 5.0)
 
-        # -- Score Content-Based (genre affinity) --
+        # Score Content-Based + blending hybride
         cb_scores = self._compute_genre_affinity(user_idx)
-
-        # -- Score Hybride : ponderation SVD + Content-Based --
-        predicted_scores = (1 - CB_WEIGHT) * svd_scores + CB_WEIGHT * cb_scores
-
-        # Score final dans [0, 5]
+        predicted_scores = (1 - self.cb_weight) * svd_scores + self.cb_weight * cb_scores
         predicted_scores = np.clip(predicted_scores, 0.0, 5.0)
 
-        # Appliquer le boost de genre (multiplicatif, declenche par JADE)
         predicted_scores = self._apply_genre_boost(predicted_scores)
-
-        # Masquer les films deja notes (score -> -inf pour le tri)
         predicted_scores[~unrated_mask] = -np.inf
 
-        # -- Bandit Epsilon-Greedy : compromis Exploration vs Exploitation --
-        # Indices des films non notes, tries par score decroissant
+        # Bandit Epsilon-Greedy
         unrated_indices = np.where(unrated_mask)[0]
         sorted_unrated = unrated_indices[
             np.argsort(predicted_scores[unrated_indices])[::-1]
         ]
 
-        # Nombre de slots exploitation vs exploration
-        # Au moins 1 slot DISCOVERY pour garantir l exploration
         n_explore = max(1, int(top_n * self.epsilon))
         n_exploit = top_n - n_explore
-
-        # Clamper si pas assez de films non notes disponibles
         n_exploit = min(n_exploit, len(sorted_unrated))
         n_explore = min(n_explore, max(0, len(sorted_unrated) - n_exploit))
 
         recommendations = []
 
-        # -- Exploitation : les films avec le plus haut P_u . Q_i (MATCH) --
         exploit_indices = sorted_unrated[:n_exploit]
         for idx in exploit_indices:
             mid = self.movie_ids[idx]
@@ -538,8 +434,6 @@ class RecommenderSystem:
                 "strategy": "MATCH",
             })
 
-        # -- Exploration : film aleatoire parmi les non-selectionnes (DISCOVERY) --
-        # Le bandit "tire un bras" au hasard pour decouvrir de nouvelles preferences
         remaining_indices = sorted_unrated[n_exploit:]
         if len(remaining_indices) > 0 and n_explore > 0:
             explore_picks = np.random.choice(
@@ -567,6 +461,35 @@ class RecommenderSystem:
                     user_id, len(recommendations), match_count, discovery_count)
         return {"user_id": user_id, "recommendations": recommendations}
 
+    def set_config(self, cb_weight: Optional[float] = None,
+                   epsilon: Optional[float] = None,
+                   use_bias: Optional[bool] = None) -> Dict:
+        """
+        Met a jour les hyperparametres du moteur a chaud (pour benchmarking).
+        Seuls les parametres fournis (non-None) sont modifies.
+        """
+        if cb_weight is not None:
+            self.cb_weight = float(cb_weight)
+        if epsilon is not None:
+            self.epsilon = float(epsilon)
+        if use_bias is not None:
+            self.use_bias = bool(use_bias)
+        config = {
+            "cb_weight": self.cb_weight,
+            "epsilon": self.epsilon,
+            "use_bias": self.use_bias,
+        }
+        print(f"[RAY-ACTOR] Config updated: {config}")
+        return config
+
+    def get_config(self) -> Dict:
+        """Retourne la configuration actuelle du moteur."""
+        return {
+            "cb_weight": self.cb_weight,
+            "epsilon": self.epsilon,
+            "use_bias": self.use_bias,
+        }
+
     def boost_genre(self, genre: str) -> None:
         """Definit le genre booste (declenche par message XMPP BOOST_GENRE)."""
         print(f"[RAY-ACTOR] Genre boost updated: {self.boosted_genre} -> {genre}")
@@ -574,12 +497,7 @@ class RecommenderSystem:
         self.boosted_genre = genre
 
     def get_stats(self) -> Dict:
-        """
-        Statistiques systeme consommees par l agent JADE TrendScout.
-
-        genre_popularity : fractions du total (pour l UI).
-        genre_votes      : compteurs absolus (pour le seuil JADE > 5).
-        """
+        """Statistiques systeme (consommees par l'agent JADE TrendScout)."""
         genre_popularity = {}
         for genre, count in self.rating_counts_by_genre.items():
             genre_popularity[genre] = round(count / max(self.total_ratings, 1), 3)
@@ -598,36 +516,19 @@ class RecommenderSystem:
         }
 
     def reset(self) -> Dict:
-        """
-        Reinitialise completement le systeme (DANGEREUX — pour tests uniquement).
-
-        Remet a zero :
-            - Tous les utilisateurs et leurs vecteurs latents P
-            - Toutes les notes dans la matrice ratings
-            - Les facteurs latents items Q (re-initialises avec bruit gaussien)
-            - Les compteurs de stats et le boost genre
-
-        Retourne le nombre d utilisateurs/ratings supprimes.
-        """
+        """Reinitialise completement le systeme (pour tests uniquement)."""
         old_users = len(self.user_ids)
         old_ratings = self.total_ratings
 
-        # Reset users et matrice de notes
         self.user_ids = []
         self.user_index = {}
         self.ratings = np.zeros((0, len(self.movie_ids)), dtype=np.float64)
-
-        # Reset facteurs latents P (vide) et Q (re-initialise)
         self.user_latent_factors = np.zeros((0, self.latent_dim), dtype=np.float64)
         self.item_latent_factors = np.random.uniform(
             -0.01, 0.01, size=(len(self.movie_ids), self.latent_dim)
         )
-
-        # Reset biais
         self.user_bias = np.zeros(0, dtype=np.float64)
         self.item_bias = np.zeros(len(self.movie_ids), dtype=np.float64)
-
-        # Reset boost et compteurs
         self.boosted_genre = None
         self.total_ratings = 0
         self.rating_counts_by_genre = {m["genre"]: 0 for m in MOVIE_CATALOG.values()}

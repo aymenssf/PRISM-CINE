@@ -341,19 +341,29 @@
         `;
 
         try {
-            const res = await fetch(`/api/recommend/${encodeURIComponent(userId)}?n=8`);
-            const data = await res.json();
+            // Fetch recommendations AND current boost status in parallel
+            const [recRes, boostRes] = await Promise.all([
+                fetch(`/api/recommend/${encodeURIComponent(userId)}?n=8`),
+                fetch('/api/boost-status')
+            ]);
+            const data = await recRes.json();
+            const boostData = await boostRes.json();
 
             if (!data.recommendations || data.recommendations.length === 0) {
                 list.innerHTML = '<div class="col-span-full text-center text-neutral-500 text-xs font-mono">NO DATA FOUND FOR USER</div>';
                 return;
             }
 
-            const currentBoost = '{{ current_boost or "" }}';
+            // Dynamic boost -- always fresh from server
+            const currentBoost = boostData.boosted_genre || '';
             const posters = {{ posters|tojson|safe }};  // Dict {movie_id: poster_url}
+
+            // Update the Dynamic Island header if boost changed
+            updateDynamicIsland(currentBoost);
 
             list.innerHTML = data.recommendations.map(r => {
                 const isDiscovery = r.strategy === 'DISCOVERY';
+                const isBoosted = !isDiscovery && currentBoost && r.genre.includes(currentBoost);
                 // Styles
                 let cardClass = "bg-neutral-900 border-neutral-800 hover:border-neutral-500";
                 let badgeClass = "bg-neutral-800 text-neutral-400 border-neutral-700";
@@ -361,7 +371,7 @@
                 if (isDiscovery) {
                     cardClass = "bg-violet-950/10 border-violet-500/30 hover:border-violet-400 hover:shadow-[0_0_30px_rgba(139,92,246,0.15)]";
                     badgeClass = "bg-violet-500/10 text-violet-300 border-violet-500/30";
-                } else if (currentBoost && r.genre.includes(currentBoost)) {
+                } else if (isBoosted) {
                     cardClass = "bg-emerald-950/10 border-emerald-500/50 hover:border-emerald-400 hover:shadow-[0_0_30px_rgba(16,185,129,0.15)]";
                     badgeClass = "bg-emerald-500/10 text-emerald-300 border-emerald-500/30";
                 }
@@ -383,8 +393,14 @@
                         </div>
 
                         ${isDiscovery ? `
-                            <div class="absolute top-3 left-3 px-2 py-1 text-[8px] font-bold tracking-widest uppercase border border-violet-500/50 bg-violet-900/80 text-violet-200 rounded backdrop-blur-md">
+                            <div class="absolute top-3 left-3 px-2 py-1 text-[8px] font-bold tracking-widest uppercase border border-violet-500/50 bg-violet-900/80 text-violet-200 rounded backdrop-blur-md animate-pulse">
                                 DISCOVERY
+                            </div>
+                        ` : ''}
+                        ${isBoosted ? `
+                            <div class="absolute top-3 left-3 px-2 py-1 text-[8px] font-bold tracking-widest uppercase border border-emerald-500/50 bg-emerald-900/80 text-emerald-200 rounded backdrop-blur-md flex items-center gap-1">
+                                <span class="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-ping"></span>
+                                TRENDING
                             </div>
                         ` : ''}
                     </div>
@@ -394,6 +410,7 @@
                         <h3 class="text-md font-bold text-white leading-tight mb-4 group-hover:text-indigo-300 transition-colors line-clamp-2">${r.title}</h3>
 
                         <div class="flex items-center justify-between pt-4 border-t border-white/5">
+                             <span class="px-2 py-0.5 text-[8px] font-bold tracking-widest uppercase rounded border ${badgeClass}">${r.strategy}</span>
                              <div class="text-[9px] font-mono text-neutral-600">CONFIDENCE: ${(Math.random() * (99 - 85) + 85).toFixed(1)}%</div>
                         </div>
                     </div>
@@ -406,5 +423,48 @@
             list.innerHTML = '<div class="col-span-full text-center text-red-500 text-xs font-mono">SYSTEM ERROR: CONNECTION LOST</div>';
         }
     }
+
+    /* -- Update Dynamic Island header with boost status -- */
+    function updateDynamicIsland(genre) {
+        const island = document.getElementById('dynamic-island');
+        if (!island) return;
+        if (genre) {
+            island.className = 'w-auto px-6 py-2 bg-neutral-900/90 backdrop-blur-xl border border-red-500/20 shadow-[0_0_30px_rgba(220,38,38,0.3)] rounded-full flex items-center justify-center gap-3';
+            island.innerHTML = `
+                <span class="relative flex h-2 w-2">
+                    <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-red-400 opacity-75"></span>
+                    <span class="relative inline-flex rounded-full h-2 w-2 bg-red-500"></span>
+                </span>
+                <span class="font-mono text-xs font-bold tracking-widest text-red-400 whitespace-nowrap">
+                    TREND DETECTED: ${genre.toUpperCase()}
+                </span>
+            `;
+        }
+    }
+
+    /* -- Auto-load recs on page load if stats show users exist -- */
+    (async function autoLoadFeed() {
+        try {
+            const statsRes = await fetch('/api/stats');
+            const stats = await statsRes.json();
+            if (stats.total_users > 0 && stats.total_ratings > 0) {
+                // Pre-fill the first known user and trigger fetch
+                const defaultUser = 'aymen';
+                document.getElementById('recUserId').value = defaultUser;
+                await fetchRecs();
+            }
+        } catch (e) { /* silent */ }
+    })();
+
+    /* -- Poll boost status every 10s to update Dynamic Island -- */
+    setInterval(async () => {
+        try {
+            const res = await fetch('/api/boost-status');
+            const data = await res.json();
+            if (data.boosted_genre) {
+                updateDynamicIsland(data.boosted_genre);
+            }
+        } catch (e) { /* silent */ }
+    }, 10000);
 </script>
 {% endblock %}
