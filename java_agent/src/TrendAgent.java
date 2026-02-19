@@ -200,8 +200,8 @@ public class TrendAgent extends Agent {
             String apiUrl = "http://" + xmppHost + ":5280/api/send_message";
             String body = String.format(
                     "{\"type\":\"chat\","
-                            + "\"from\":\"trendscout@kinetoscope.local\","
-                            + "\"to\":\"recommender@kinetoscope.local\","
+                            + "\"from\":\"trendscout@prismcine.local\","
+                            + "\"to\":\"recommender@prismcine.local\","
                             + "\"subject\":\"boost\","
                             + "\"body\":\"BOOST_GENRE:%s\"}",
                     genre);
@@ -212,7 +212,7 @@ public class TrendAgent extends Agent {
             conn.setRequestProperty("Content-Type", "application/json");
 
             // Auth Basic requise par api_permissions dans ejabberd.yml
-            String credentials = xmppAdminUser + "@kinetoscope.local:" + xmppAdminPass;
+            String credentials = xmppAdminUser + "@prismcine.local:" + xmppAdminPass;
             String encoded = Base64.getEncoder().encodeToString(credentials.getBytes());
             conn.setRequestProperty("Authorization", "Basic " + encoded);
             conn.setDoOutput(true);
